@@ -1,7 +1,11 @@
-use image::EncodableLayout;
+use std::{f32::EPSILON, num::NonZeroU32};
+
+use std::rc::Rc;
 use wgpu::{util::DeviceExt, ShaderStages, SurfaceConfiguration};
 
+pub mod atlas;
 pub mod font;
+pub mod image;
 pub mod instance;
 use crate::assets;
 
@@ -15,12 +19,13 @@ pub struct PrimitiveInstance {
     pub stroke_width: f32,
     pub roundness: f32,
     pub rotation: f32,
-    pub sides: i32,
+    pub sides: u32,
+    pub uv: [f32; 4],
 }
 
 impl PrimitiveInstance {
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
-        static ATTRS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![
+        static ATTRS: [wgpu::VertexAttribute; 9] = wgpu::vertex_attr_array![
             0 => Float32x3,
             1 => Float32x2,
             2 => Uint32,
@@ -28,7 +33,8 @@ impl PrimitiveInstance {
             4 => Float32,
             5 => Float32,
             6 => Float32,
-            7 => Sint32,
+            7 => Uint32,
+            8 => Float32x4,
         ];
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Self>() as u64,
@@ -72,7 +78,8 @@ impl TextInstance {
 }
 
 pub struct Renderer {
-    // Note: it's possible to have a single instance manager, but this is cleaner
+    device: Rc<wgpu::Device>,
+    queue: Rc<wgpu::Queue>,
     primitive_instance_manager: instance::Manager<PrimitiveInstance>,
     primitive_pipeline: wgpu::RenderPipeline,
     text_instance_manager: instance::Manager<TextInstance>,
@@ -80,6 +87,8 @@ pub struct Renderer {
     text_bind_group: wgpu::BindGroup,
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
+    atlas_manager: atlas::Manager,
+    current_texture_uv: [f32; 4],
     width: u32,
     height: u32,
     pub font: font::Font,
@@ -96,14 +105,40 @@ pub struct Renderer {
 
 impl Renderer {
     pub fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        device: &Rc<wgpu::Device>,
+        queue: &Rc<wgpu::Queue>,
         surf_conf: &wgpu::SurfaceConfiguration,
     ) -> Self {
+        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Depth"),
+            size: wgpu::Extent3d {
+                width: surf_conf.width,
+                height: surf_conf.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+
+        let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let atlas_manager = atlas::Manager::new(device, queue);
+
+        let primitive_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Primitive"),
+                bind_group_layouts: &[atlas_manager.bind_group_layout()],
+                push_constant_ranges: &[],
+            });
+
         let primitive_shader = device.create_shader_module(assets::get_shader("primitive.wgsl"));
         let primitive_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Primitive"),
-            layout: None,
+            layout: Some(&primitive_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &primitive_shader,
                 entry_point: "vs_main",
@@ -230,31 +265,18 @@ impl Renderer {
             multiview: None,
         });
 
-        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: None,
-            size: wgpu::Extent3d {
-                width: surf_conf.width,
-                height: surf_conf.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-
-        let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
         Self {
-            primitive_instance_manager: instance::Manager::new(device),
+            device: device.clone(),
+            queue: queue.clone(),
+            primitive_instance_manager: instance::Manager::new(device, queue),
             primitive_pipeline,
-            text_instance_manager: instance::Manager::new(device),
+            text_instance_manager: instance::Manager::new(device, queue),
             text_pipeline,
             text_bind_group,
             depth_texture,
             depth_view,
+            atlas_manager,
+            current_texture_uv: [0.0, 0.0, 0.0, 0.0],
             font,
             width: surf_conf.width,
             height: surf_conf.height,
@@ -271,13 +293,13 @@ impl Renderer {
     }
 
     // Always resize before rendering, if surface is same this does nothing
-    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+    pub fn resize(&mut self, width: u32, height: u32) {
         if width == self.width && height == self.height {
             return;
         }
         self.width = width;
         self.height = height;
-        self.depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+        self.depth_texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {
                 width,
@@ -296,14 +318,24 @@ impl Renderer {
             .create_view(&wgpu::TextureViewDescriptor::default());
     }
 
-    pub fn add(&mut self, instance: PrimitiveInstance) {
-        self.primitive_instance_manager.add(instance);
-        self.depth -= f32::EPSILON;
+    pub fn set_image(&mut self, image: &Rc<image::Image>) {
+        let (x, y, w, h) = self.atlas_manager.add(image);
+        self.current_texture_uv = [x, y, w, h];
     }
 
-    pub fn ngon(&mut self, x: f32, y: f32, width: f32, height: f32, sides: i32) {
+    pub fn clear_image(&mut self) {
+        self.current_texture_uv = [0.0, 0.0, 0.0, 0.0];
+    }
+
+    pub fn add(&mut self, mut instance: PrimitiveInstance) {
+        self.depth -= f32::EPSILON;
+        instance.position[2] = self.depth;
+        self.primitive_instance_manager.add(instance);
+    }
+
+    pub fn ngon(&mut self, x: f32, y: f32, width: f32, height: f32, sides: u32) {
         self.add(PrimitiveInstance {
-            position: [x + self.position[0], y + self.position[1], self.depth],
+            position: [x + self.position[0], y + self.position[1], 0.0],
             scale: [width * self.scale[0], height * self.scale[1]],
             color: self.color,
             stroke_color: self.stroke_color,
@@ -311,6 +343,7 @@ impl Renderer {
             roundness: self.roundness,
             rotation: self.rotation,
             sides,
+            uv: self.current_texture_uv,
         });
     }
 
@@ -324,7 +357,7 @@ impl Renderer {
 
     pub fn round_rect(&mut self, x: f32, y: f32, width: f32, height: f32, roundness: f32) {
         let old_roundness = self.roundness;
-        self.roundness = roundness;
+        self.roundness += roundness;
         self.rect(x, y, width, height);
         self.roundness = old_roundness;
     }
@@ -335,6 +368,30 @@ impl Renderer {
 
     pub fn round_square(&mut self, x: f32, y: f32, size: f32, roundness: f32) {
         self.round_rect(x, y, size, size, roundness)
+    }
+
+    pub fn line(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, size: f32) {
+        let dir_x = x2 - x1;
+        let dir_y = y2 - y1;
+        let length = (dir_x * dir_x + dir_y * dir_y).sqrt() * 0.5;
+        let angle = dir_y.atan2(dir_x);
+        self.rotation -= angle;
+        self.round_rect((x1 + x2) * 0.5, (y1 + y2) * 0.5, length + size, size, 1.0);
+        self.rotation += angle;
+    }
+
+    pub fn lines(&mut self, points: &[f32], size: f32) {
+        assert!(points.len() % 2 == 0, "must have x and y for each point!");
+        assert!(points.len() >= 4, "must specify 2+ points with x,y!");
+        for i in 0..points.len() / 2 - 1 {
+            let p1x = points[i * 2];
+            let p1y = points[i * 2 + 1];
+            let p2x = points[(i + 1) * 2];
+            let p2y = points[(i + 1) * 2 + 1];
+            self.line(p1x, p1y, p2x, p2y, size);
+            self.depth += f32::EPSILON;
+        }
+        self.depth -= f32::EPSILON;
     }
 
     pub fn circle(&mut self, x: f32, y: f32, radius: f32) {
@@ -371,13 +428,28 @@ impl Renderer {
         self.depth -= f32::EPSILON;
     }
 
-    pub fn flush(&mut self, queue: &wgpu::Queue, device: &wgpu::Device) {
-        self.depth = 1.0;
-        self.primitive_instance_manager.flush(queue, device);
-        self.text_instance_manager.flush(queue, device);
+    pub fn atlas(&mut self) {
+        self.current_texture_uv = [0.0, 0.0, 1.0, 1.0];
+    }
+
+    pub fn reset(&mut self) {
+        self.color = [255, 255, 255, 255];
+        self.stroke_color = [255, 255, 255, 255];
+        self.stroke_width = 0.0;
+        self.bold = 0.0;
+        self.current_texture_uv = [0.0, 0.0, 0.0, 0.0];
+        self.roundness = 0.0;
+        self.rotation = 0.0;
+        self.position = [0.0, 0.0];
+        self.scale = [1.0, 1.0];
     }
 
     pub fn render(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
+        self.depth = 1.0;
+        self.reset();
+        self.atlas_manager.flush(encoder);
+        self.primitive_instance_manager.flush();
+        self.text_instance_manager.flush();
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Renderer"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -406,6 +478,7 @@ impl Renderer {
         });
 
         render_pass.set_pipeline(&self.primitive_pipeline);
+        render_pass.set_bind_group(0, &self.atlas_manager.bind_group(), &[]);
         self.primitive_instance_manager.render(&mut render_pass);
 
         render_pass.set_pipeline(&self.text_pipeline);

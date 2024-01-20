@@ -21,7 +21,7 @@ fn vs_main(
     @location(7) bold: f32,
 ) -> VertexOutput {
     var out: VertexOutput;
-    out.uv = (vec2f(f32(vert_id % 2u), f32(vert_id / 2u)) * 2.0 - 1.0) * 1.25;
+    out.uv = (vec2f(f32(vert_id % 2u), f32(vert_id / 2u)) * 2.0 - 1.0) * 1.75;
     let pos = (cos(rotation) * out.uv + sin(rotation) * vec2f(out.uv.y, -out.uv.x)) * scale + position.xy;
     out.clip_position = vec4f(pos, position.z, 1.0);
     out.color = unpack4x8unorm(color);
@@ -32,19 +32,15 @@ fn vs_main(
     return out;
 }
 
-@group(0) @binding(0)
-var t_atlas: texture_2d<f32>;
-@group(0) @binding(1)
-var s_atlas: sampler;
+@group(0) @binding(0) var t_atlas: texture_2d<f32>;
+@group(0) @binding(1) var s_atlas: sampler;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     var color = in.color;
     let d = (textureSample(t_atlas, s_atlas, (in.uv * vec2f(0.5, -0.5) + vec2f(0.5, -0.5)) * in.texcoord.zw + in.texcoord.xy).r + in.bold * 0.25) / 1.41421356;
-    let f = length(fwidth(in.uv));
-    let strk = in.stroke_width * 0.5 + 0.5;
-    color = mix(color, in.stroke_color, smoothstep(strk, strk - f, d)); // TODO: Fix transparency for 'I' and 'l'
-    color.a *= smoothstep(0.5, 0.5 + f, d);
+    let dd = length(vec2f(dpdx(d), dpdy(d))) * 1.5;
+    color = mix(color, in.stroke_color, clamp((0.5 - d + in.stroke_width * 0.5) / dd, 0.0, 1.0));
+    color.a = clamp((d - 0.5) / dd + 0.5, 0.0, 1.0);
     return color;
 }
- 

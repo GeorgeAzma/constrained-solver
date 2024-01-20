@@ -1499,10 +1499,12 @@ dependencies = [
 name = "silk-engine"
 version = "0.1.0"
 dependencies = [
+ "bitflags 2.4.1",
  "bytemuck",
  "image",
  "owned_ttf_parser",
  "rand",
+ "rayon",
  "tokio",
  "wgpu",
  "winit",
