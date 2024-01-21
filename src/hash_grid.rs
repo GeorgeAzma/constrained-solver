@@ -1,15 +1,14 @@
-use crate::Node;
-
 pub struct HashGrid {
+    cell_size: f32,
     point_cell_keys: Vec<(u32, u32)>,
     cell_start_indices: Vec<u32>,
 }
 
 impl HashGrid {
-    const SIZE: f32 = Node::RADIUS;
-    pub fn new(points: &Vec<(f32, f32)>) -> Self {
+    pub fn new(points: &Vec<(f32, f32)>, cell_size: f32) -> Self {
         if points.len() == 0 {
             return Self {
+                cell_size,
                 point_cell_keys: Vec::new(),
                 cell_start_indices: Vec::new(),
             };
@@ -21,7 +20,7 @@ impl HashGrid {
         cell_start_indices.resize(points.len(), u32::MAX);
 
         for (i, &(x, y)) in points.iter().enumerate() {
-            let (cx, cy) = Self::to_cell_coord(x, y);
+            let (cx, cy) = ((x / cell_size) as i32, (y / cell_size) as i32);
             let key = Self::cell_key(cx, cy, points.len() as i32);
             point_cell_keys[i] = (i as u32, key);
         }
@@ -38,13 +37,14 @@ impl HashGrid {
         }
 
         Self {
+            cell_size,
             point_cell_keys,
             cell_start_indices,
         }
     }
 
-    fn to_cell_coord(x: f32, y: f32) -> (i32, i32) {
-        ((x / Self::SIZE) as i32, (y / Self::SIZE) as i32)
+    fn to_cell_coord(&self, x: f32, y: f32) -> (i32, i32) {
+        ((x / self.cell_size) as i32, (y / self.cell_size) as i32)
     }
 
     fn cell_key(cx: i32, cy: i32, size: i32) -> u32 {
@@ -59,7 +59,7 @@ impl HashGrid {
         let mut indices = Vec::new();
         for i in -1..=1 {
             for j in -1..=1 {
-                let (cx, cy) = Self::to_cell_coord(x, y);
+                let (cx, cy) = self.to_cell_coord(x, y);
                 let (cx, cy) = (cx + i, cy + j);
                 let key = Self::cell_key(cx, cy, self.point_cell_keys.len() as i32);
                 let start = self.cell_start_indices[key as usize];

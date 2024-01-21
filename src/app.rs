@@ -1,6 +1,7 @@
 pub mod renderer;
 use std::rc::Rc;
 use winit::{
+    dpi::LogicalPosition,
     event::{Event, MouseButton, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     keyboard::KeyCode,
@@ -24,6 +25,7 @@ struct App {
     dt: f32,
     mouse_x: f32,
     mouse_y: f32,
+    mouse_scroll: f32,
     mouse: [bool; 5],
     key: [bool; 194],
     mouse_pressed: [bool; 5],
@@ -98,6 +100,7 @@ impl App {
             dt: 0.0,
             mouse_x: 0.0,
             mouse_y: 0.0,
+            mouse_scroll: 0.0,
             mouse: [false; 5],
             key: [false; 194],
             mouse_pressed: [false; 5],
@@ -136,14 +139,26 @@ impl App {
                 state,
                 button,
             } => self.mouse[Self::mouse_button_idx(*button)] = state.is_pressed(),
+            WindowEvent::MouseWheel {
+                device_id: _,
+                delta,
+                phase: _,
+            } => {
+                use winit::event::MouseScrollDelta;
+                match delta {
+                    MouseScrollDelta::LineDelta(_, y) => self.mouse_scroll = *y,
+                    MouseScrollDelta::PixelDelta(_) => todo!(),
+                }
+            }
             WindowEvent::Touch(touch) => {
                 self.mouse_x = touch.location.x as f32;
                 self.mouse_y = touch.location.y as f32;
+                use winit::event::TouchPhase;
                 match touch.phase {
-                    winit::event::TouchPhase::Started => self.mouse[0] = true,
-                    winit::event::TouchPhase::Ended => self.mouse[0] = false,
-                    winit::event::TouchPhase::Moved => self.mouse[0] = true,
-                    winit::event::TouchPhase::Cancelled => self.mouse[0] = false,
+                    TouchPhase::Started => self.mouse[0] = true,
+                    TouchPhase::Ended => self.mouse[0] = false,
+                    TouchPhase::Moved => self.mouse[0] = true,
+                    TouchPhase::Cancelled => self.mouse[0] = false,
                 }
             }
             WindowEvent::KeyboardInput {
@@ -173,8 +188,6 @@ impl App {
         let simple_app = self.simple_app.as_mut().unwrap();
         simple_app.app = ptr;
         simple_app.update();
-        self.mouse_pressed = self.mouse.clone();
-        self.key_pressed = self.key.clone();
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -196,6 +209,10 @@ impl App {
         self.queue.submit(std::iter::once(encoder.finish()));
 
         output.present();
+
+        self.mouse_scroll = 0.0;
+        self.mouse_pressed = self.mouse.clone();
+        self.key_pressed = self.key.clone();
 
         Ok(())
     }
@@ -230,7 +247,7 @@ impl App {
 
     #[allow(dead_code)]
     pub fn mouse_down(&self, m: MouseButton) -> bool {
-        return self.key[Self::mouse_button_idx(m)];
+        return self.mouse[Self::mouse_button_idx(m)];
     }
 
     #[allow(dead_code)]
@@ -250,7 +267,8 @@ impl App {
 }
 
 pub async fn run() {
-    let size = winit::dpi::PhysicalSize::new(500, 500);
+    use winit::dpi::{PhysicalSize, Position};
+    let size = PhysicalSize::new(900, 900);
     let event_loop = EventLoop::new().unwrap();
     let window = std::rc::Rc::new(
         WindowBuilder::new()
@@ -258,6 +276,11 @@ pub async fn run() {
             .build(&event_loop)
             .unwrap(),
     );
+    let monitor = window.current_monitor().unwrap();
+    window.set_outer_position(LogicalPosition::new(
+        monitor.size().width / 2 - size.width / 2,
+        monitor.size().height / 2 - size.height / 2,
+    ));
 
     let mut app = App::new(window).await;
     event_loop.set_control_flow(ControlFlow::Poll);

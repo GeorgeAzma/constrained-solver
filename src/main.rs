@@ -1,4 +1,4 @@
-#[allow(dead_code, unused_imports)]
+#![allow(dead_code, unused_imports)]
 pub mod app;
 pub mod assets;
 pub mod cooldown;
@@ -12,6 +12,8 @@ pub mod constraint;
 pub use constraint::*;
 pub mod hash_grid;
 pub use hash_grid::*;
+pub mod event;
+pub use event::*;
 
 #[tokio::main]
 async fn main() {

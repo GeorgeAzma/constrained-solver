@@ -7,6 +7,12 @@ bitflags::bitflags! {
     }
 }
 
+impl From<Axes> for u32 {
+    fn from(axes: Axes) -> u32 {
+        axes.bits()
+    }
+}
+
 #[repr(u32, align(4))]
 #[derive(Clone, Default)]
 pub enum Constraint {
@@ -20,7 +26,11 @@ pub enum Constraint {
     Link {
         node: u32,
         distance: f32,
-        hydraulic_speed: f32, // <=0 if not hydraulic
+    },
+    Hydraulic {
+        node: u32,
+        distance: f32,
+        speed: f32,
     },
     Spring {
         node: u32,

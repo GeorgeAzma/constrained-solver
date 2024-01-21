@@ -1,0 +1,3 @@
+- Make link placing/removing faster (avoid iterating over all nodes)
+- Add ghost placement
+- Material selection GUI
