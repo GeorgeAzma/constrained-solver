@@ -8,9 +8,8 @@ use std::{
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 pub enum ColliderType {
     #[default]
+    None,
     Node,
-    Road,
-    Polygon,
 }
 
 #[derive(Clone, Default)]
@@ -263,9 +262,13 @@ impl World {
                         *distance = self.nodes[*node as usize].p.dist(&a.p);
                     }
                 }
-                Constraint::Freeze { axes: _, x, y } => {
-                    *x = a.p.x;
-                    *y = a.p.y;
+                Constraint::Freeze { axes, x, y } => {
+                    if axes.contains(Axes::X) {
+                        *x = a.p.x;
+                    }
+                    if axes.contains(Axes::Y) {
+                        *y = a.p.y;
+                    }
                 }
                 _ => {}
             }
@@ -452,39 +455,36 @@ impl World {
         let hash_grid = HashGrid::new(&points, self.radius / self.scale());
 
         for n in self.nodes.iter_mut() {
-            n.v.y -= 4.0 * self.dt; // Gravity
-
-            // n.v -= n.v * 0.2 * self.dt; // Drag
+            n.v.y -= 6.0 * self.dt; // Gravity
+                                    // n.v -= n.v * 0.3 * self.dt; // Drag
         }
         for i in 0..self.nodes.len() {
             let nodes = self.nodes.as_mut_ptr();
             let a = unsafe { nodes.add(i as usize).as_mut().unwrap() };
-            // Should be !=, but for debugging purposes it's ==
-            if a.collider_type == ColliderType::Node {
-                let collisions = hash_grid.find(a.p.x, a.p.y);
-                for b_idx in collisions {
-                    if b_idx == i as u32 {
-                        continue;
-                    }
-                    let b = unsafe { nodes.add(b_idx as usize).as_mut().unwrap() };
-                    if a.collider_type == ColliderType::Road
-                        && b.collider_type == ColliderType::Road
-                    {
-                        continue;
-                    }
-                    let dist = a.p.dist(&b.p);
-                    if dist < self.radius * 2.0 / self.scale() {
-                        // Resolution
-                        let to_b = b.p - a.p;
-                        let push = to_b * (dist - self.radius * 2.0 / self.scale()) * 0.5;
-                        a.p += push;
-                        b.p -= push;
+            if a.collider_type == ColliderType::None {
+                continue;
+            }
+            let collisions = hash_grid.find(a.p.x, a.p.y);
+            for b_idx in collisions {
+                if b_idx == i as u32 {
+                    continue;
+                }
+                let b = unsafe { nodes.add(b_idx as usize).as_mut().unwrap() };
+                if a.collider_type == ColliderType::None {
+                    continue;
+                }
+                let dist = a.p.dist(&b.p);
+                if dist < self.radius * 2.0 / self.scale() {
+                    // Resolution
+                    let to_b = b.p - a.p;
+                    let push = to_b * (dist - self.radius * 2.0 / self.scale()) * 0.5;
+                    a.p += push;
+                    b.p -= push;
 
-                        // Linear impulse
-                        let impulse_mag = to_b * (a.v - b.v).dot(&to_b) / (dist * dist);
-                        a.v -= impulse_mag;
-                        b.v += impulse_mag;
-                    }
+                    // Linear impulse
+                    let impulse_mag = to_b * (a.v - b.v).dot(&to_b) / (dist * dist);
+                    a.v -= impulse_mag;
+                    b.v += impulse_mag;
                 }
             }
 
@@ -554,9 +554,21 @@ impl World {
                         let b = unsafe { nodes.add(*node as usize).as_mut().unwrap() };
                         let dist = a.p.dist(&b.p);
                         let n = (a.p - b.p) / dist;
-                        let push = (*distance - dist) * 0.5;
-                        a.v += n * push * *stiffness * 64.0 * self.dt;
-                        b.v -= n * push * *stiffness * 64.0 * self.dt;
+                        let push = *distance - dist;
+                        a.p += n
+                            * (push.abs().sqrt() + push * push)
+                            * push.signum()
+                            * *stiffness
+                            * 2.0
+                            * self.dt;
+                        b.p -= n
+                            * (push.abs().sqrt() + push * push)
+                            * push.signum()
+                            * *stiffness
+                            * 2.0
+                            * self.dt;
+                        a.v += n * push * *stiffness * 128.0 * self.dt;
+                        b.v -= n * push * *stiffness * 128.0 * self.dt;
                     }
                     Constraint::Range { axes, start, end } => {
                         if axes.contains(Axes::X) {
@@ -784,9 +796,8 @@ impl World {
             writer.write_all(&n.v.x.to_le_bytes())?;
             writer.write_all(&n.v.y.to_le_bytes())?;
             let collider_type = match n.collider_type {
-                ColliderType::Node => 0u32,
-                ColliderType::Road => 1u32,
-                ColliderType::Polygon => 2u32,
+                ColliderType::None => 0u32,
+                ColliderType::Node => 1u32,
             };
             writer.write_all(&collider_type.to_le_bytes())?;
             writer.write_all(&n.constraint_len.to_le_bytes())?;
@@ -865,9 +876,8 @@ impl World {
             reader.read_exact(&mut buf)?;
             let collider_type = u32::from_le_bytes(buf);
             n.collider_type = match collider_type {
-                1 => ColliderType::Road,
-                2 => ColliderType::Polygon,
-                _ => ColliderType::Node,
+                1 => ColliderType::Node,
+                _ => ColliderType::None,
             };
             reader.read_exact(&mut buf)?;
             n.constraint_len = u32::from_le_bytes(buf);
