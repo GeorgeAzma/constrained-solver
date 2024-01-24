@@ -1,4 +1,4 @@
-use crate::World;
+use crate::{Vec2, World};
 
 pub trait Integrator {
     fn new() -> Self;
@@ -12,6 +12,7 @@ impl Integrator for Euler {
         Self
     }
     fn solve(&mut self, world: &mut World) {
+        world.step();
         for n in world.nodes.iter_mut() {
             n.p += n.v * world.dt;
         }
@@ -28,12 +29,50 @@ impl Integrator for RK4 {
     }
 
     fn solve(&mut self, world: &mut World) {
-        for i in 0..world.nodes.len() {
-            let k1 = world.nodes[i].v * world.dt;
-            let k2 = (world.nodes[i].v + k1 * 0.5) * world.dt;
-            let k3 = (world.nodes[i].v + k2 * 0.5) * world.dt;
-            let k4 = (world.nodes[i].v + k3) * world.dt;
-            world.nodes[i].p += (k1 + k2 * 2.0 + k3 * 2.0 + k4) / 6.0;
-        }
+        let p0: Vec<Vec2> = world.nodes.iter().map(|n| n.p).collect();
+        let v0: Vec<Vec2> = world.nodes.iter().map(|n| n.v).collect();
+        world.step();
+        let p1: Vec<Vec2> = world
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.p - p0[i]))
+            .collect();
+        let v1: Vec<Vec2> = world
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.v - v0[i]))
+            .collect();
+        let mut step = |p1: &[Vec2], v1: &[Vec2], m: f32| -> (Vec<Vec2>, Vec<Vec2>) {
+            for i in 0..world.nodes.len() {
+                world.nodes[i].p = p0[i] + p1[i] * m;
+                world.nodes[i].v = v0[i] + v1[i] * m;
+            }
+            world.dt *= m;
+            world.step();
+            let p1 = world
+                .nodes
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (n.p - p0[i] - p1[i] * m))
+                .collect();
+            let v1 = world
+                .nodes
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (n.v - v0[i] - v1[i] * m))
+                .collect();
+            world.dt /= m;
+            (p1, v1)
+        };
+        let (p2, v2) = step(&p1, &v1, 0.5);
+        let (p3, v3) = step(&p2, &v2, 0.5);
+        let (p4, v4) = step(&p3, &v3, 1.0);
+        world.nodes.iter_mut().enumerate().for_each(|(i, n)| {
+            n.p = p0[i] + (p1[i] + p2[i] * 2.0 + p3[i] * 2.0 + p4[i]) / 6.0;
+            n.v = v0[i] + (v1[i] + v2[i] * 2.0 + v3[i] * 2.0 + v4[i]) / 6.0;
+            n.p += n.v * world.dt;
+        });
     }
 }

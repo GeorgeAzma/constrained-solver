@@ -250,42 +250,43 @@ impl World {
         }
     }
 
-    pub fn move_node(&mut self, node_idx: u32, x: f32, y: f32) {
+    pub fn move_node(&mut self, node_idx: u32, x: f32, y: f32, update_constraints: bool) {
         let a = unsafe { &mut *self.nodes.as_mut_ptr().add(node_idx as usize) };
-        a.p = Vec2::new(x, y);
+        a.p += Vec2::new(x, y);
+        a.v = Vec2::ZERO;
         for i in 0..a.constraint_len {
             match &mut a.constraints[i as usize] {
                 Constraint::Link { node, distance }
                 | Constraint::Hydraulic { node, distance, .. }
                 | Constraint::Spring { node, distance, .. } => {
-                    if self.dt == 0.0 {
+                    if update_constraints {
                         *distance = self.nodes[*node as usize].p.dist(&a.p);
                     }
                 }
-                Constraint::Freeze { axes, x, y } => {
+                Constraint::Freeze { axes, x: fx, y: fy } => {
                     if axes.contains(Axes::X) {
-                        *x = a.p.x;
+                        *fx += x;
                     }
                     if axes.contains(Axes::Y) {
-                        *y = a.p.y;
+                        *fy += y;
                     }
                 }
                 _ => {}
             }
-        }
 
-        if self.dt == 0.0 {
-            for b in self.nodes.iter_mut() {
-                for i in 0..b.constraint_len {
-                    match &mut b.constraints[i as usize] {
-                        Constraint::Link { node, distance, .. }
-                        | Constraint::Hydraulic { node, distance, .. }
-                        | Constraint::Spring { node, distance, .. } => {
-                            if *node == node_idx {
-                                *distance = b.p.dist(&a.p);
+            if update_constraints {
+                for b in self.nodes.iter_mut() {
+                    for i in 0..b.constraint_len {
+                        match &mut b.constraints[i as usize] {
+                            Constraint::Link { node, distance, .. }
+                            | Constraint::Hydraulic { node, distance, .. }
+                            | Constraint::Spring { node, distance, .. } => {
+                                if *node == node_idx {
+                                    *distance = b.p.dist(&a.p);
+                                }
                             }
+                            _ => {}
                         }
-                        _ => {}
                     }
                 }
             }
@@ -302,8 +303,7 @@ impl World {
 
     pub fn move_all(&mut self, x: f32, y: f32) {
         for i in 0..self.nodes.len() {
-            let p = self.nodes[i].p;
-            self.move_node(i as u32, p.x + x, p.y + y);
+            self.move_node(i as u32, x, y, false);
         }
     }
 
@@ -426,6 +426,14 @@ impl World {
     pub fn update(&mut self, integrator: &mut impl Integrator, dt: f32, steps: u32) {
         self.dt = dt / steps as f32;
 
+        if self.dt != 0.0 {
+            for _ in 0..steps {
+                integrator.solve(self);
+            }
+        }
+    }
+
+    pub fn flush(&mut self) {
         use std::collections::{HashMap, HashSet};
         let mut unique_set = HashSet::new();
         self.remove_queue.retain(|e| unique_set.insert(*e));
@@ -441,13 +449,6 @@ impl World {
         for (idx, swap_idx) in idx_map {
             self.swap_node(idx, swap_idx);
         }
-
-        if self.dt != 0.0 {
-            for _ in 0..steps {
-                self.step();
-                integrator.solve(self);
-            }
-        }
     }
 
     pub fn step(&mut self) {
@@ -456,7 +457,6 @@ impl World {
 
         for n in self.nodes.iter_mut() {
             n.v.y -= 6.0 * self.dt; // Gravity
-                                    // n.v -= n.v * 0.3 * self.dt; // Drag
         }
         for i in 0..self.nodes.len() {
             let nodes = self.nodes.as_mut_ptr();
@@ -523,8 +523,7 @@ impl World {
                         b.p -= d * 0.5;
                         if rotor_speed > 0.0 {
                             let c = (b.p - a.p).norm().cross();
-                            b.p += c * rotor_speed * dist * 0.0025 * self.dt;
-                            b.v += c * rotor_speed * dist * 0.0025;
+                            b.v += c * rotor_speed * dist * self.dt * 64.0;
                         }
                     }
                     Constraint::Hydraulic {
@@ -542,8 +541,7 @@ impl World {
                         b.p -= d * 0.5;
                         if rotor_speed > 0.0 {
                             let c = (b.p - a.p).norm().cross();
-                            b.p += c * rotor_speed * dist * 0.0025 * self.dt;
-                            b.v += c * rotor_speed * dist * 0.0025;
+                            b.v += c * rotor_speed * dist * self.dt * 64.0;
                         }
                     }
                     Constraint::Spring {
@@ -555,20 +553,14 @@ impl World {
                         let dist = a.p.dist(&b.p);
                         let n = (a.p - b.p) / dist;
                         let push = *distance - dist;
-                        a.p += n
-                            * (push.abs().sqrt() + push * push)
-                            * push.signum()
-                            * *stiffness
-                            * 2.0
-                            * self.dt;
-                        b.p -= n
-                            * (push.abs().sqrt() + push * push)
-                            * push.signum()
-                            * *stiffness
-                            * 2.0
-                            * self.dt;
-                        a.v += n * push * *stiffness * 128.0 * self.dt;
-                        b.v -= n * push * *stiffness * 128.0 * self.dt;
+                        a.p += n * push.abs().sqrt() * push.signum() * *stiffness * 8.0 * self.dt;
+                        b.p -= n * push.abs().sqrt() * push.signum() * *stiffness * 8.0 * self.dt;
+                        a.v += n * push * *stiffness * 512.0 * self.dt;
+                        b.v -= n * push * *stiffness * 512.0 * self.dt;
+                        if rotor_speed > 0.0 {
+                            let c = (b.p - a.p).norm().cross();
+                            b.v += c * rotor_speed * dist * self.dt * 64.0;
+                        }
                     }
                     Constraint::Range { axes, start, end } => {
                         if axes.contains(Axes::X) {
@@ -686,7 +678,7 @@ impl World {
                             [gfx.color[0] / 3, gfx.color[1] / 3, gfx.color[2] / 3, 255];
                         gfx.stroke_width = 0.5;
                         let to_b = b.p - a.p;
-                        let c = to_b.norm().cross() * self.link_width();
+                        let c = to_b.norm().cross() * self.link_width() / s;
                         let windings = (distance * stiffness * 32.0) as u32;
                         let inv = 1.0 / windings as f32;
                         for i in 0..windings {

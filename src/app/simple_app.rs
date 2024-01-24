@@ -1,7 +1,6 @@
 use super::renderer;
 use super::App;
-use crate::integrator::*;
-use crate::{Axes, Constraint, Vec2, World};
+use crate::{integrator::*, Axes, Constraint, Cooldown, Vec2, World};
 use owned_ttf_parser::name::Name;
 use rand::Rng;
 use std::fs::File;
@@ -28,7 +27,7 @@ pub struct SimpleApp {
     selection_start: Option<Vec2>,
     time_scale: f32,
     selected_material: Material,
-    physics_dt: f32,
+    physics_cooldown: Cooldown,
     move_start_pos: Vec2,
     scale: f32,
 }
@@ -54,7 +53,7 @@ impl SimpleApp {
             selection_start: None,
             time_scale: 1.0,
             selected_material: Material::Node,
-            physics_dt: 0.0,
+            physics_cooldown: Cooldown::new(std::time::Duration::from_secs_f32(1.0 / 2048.0)),
             move_start_pos: Vec2::ZERO,
             scale: 1.0,
         }
@@ -109,7 +108,7 @@ impl SimpleApp {
     }
 
     pub fn update(&mut self) {
-        // std::thread::sleep(std::time::Duration::from_millis(20));
+        std::thread::sleep(std::time::Duration::from_millis(4));
         let app = unsafe { self.app.as_ref().unwrap() };
         let s = self.world.scale();
         let mx = app.mouse_x / s;
@@ -121,11 +120,12 @@ impl SimpleApp {
                 }
             }
         }
-        self.world.update(
-            &mut self.integrator,
-            app.dt * self.time_scale,
-            (app.dt * 60.0) as u32 + 32,
-        );
+        while self.physics_cooldown.ready() {
+            let dt = self.physics_cooldown.delay.as_secs_f32();
+            self.world
+                .update(&mut self.integrator, dt * self.time_scale, 1);
+            self.physics_cooldown.next();
+        }
         if app.key_pressed(KeyCode::Digit1) {
             self.selected_material = Material::Node;
         } else if app.key_pressed(KeyCode::Digit2) {
@@ -191,9 +191,17 @@ impl SimpleApp {
         }
         if app.mouse_down(MouseButton::Left) && app.key_down(KeyCode::ShiftLeft) {
             if let Some(selected_node) = self.selected_node {
-                self.world.move_node(selected_node, mx, my);
+                let p = self.world.nodes[selected_node as usize].p;
+                self.world
+                    .move_node(selected_node, mx - p.x, my - p.y, self.time_scale == 0.0);
             } else if let Some(intersecting_node) = intersecting_node {
-                self.world.move_node(intersecting_node, mx, my);
+                let p = self.world.nodes[intersecting_node as usize].p;
+                self.world.move_node(
+                    intersecting_node,
+                    mx - p.x,
+                    my - p.y,
+                    self.time_scale == 0.0,
+                );
             }
         }
         if app.key_pressed(KeyCode::Space) {
@@ -212,6 +220,7 @@ impl SimpleApp {
                 break;
             }
         }
+        self.world.flush();
     }
 
     pub fn event(&mut self, _event: &WindowEvent) {}

@@ -48,7 +48,10 @@ impl HashGrid {
     }
 
     fn cell_key(cx: i32, cy: i32, size: i32) -> u32 {
-        ((cx * 15823 + cy * 9737333) % size).abs() as u32
+        (cx.wrapping_mul(15823)
+            .wrapping_add(cy.wrapping_mul(9737333))
+            % size)
+            .abs() as u32
     }
 
     pub fn find(&self, x: f32, y: f32) -> Vec<u32> {

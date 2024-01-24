@@ -2,6 +2,7 @@
 pub mod app;
 pub mod assets;
 pub mod cooldown;
+pub use cooldown::*;
 pub mod vec2;
 pub use vec2::*;
 pub mod world;
