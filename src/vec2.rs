@@ -224,11 +224,11 @@ impl Vec2 {
     pub const NEG_X: Self = Self { x: -1.0, y: 0.0 };
     pub const NEG_Y: Self = Self { x: 0.0, y: -1.0 };
 
-    pub fn splat(v: f32) -> Self {
+    pub const fn splat(v: f32) -> Self {
         Self::new(v, v)
     }
 
-    pub fn new(x: f32, y: f32) -> Self {
+    pub const fn new(x: f32, y: f32) -> Self {
         Self { x, y }
     }
 
@@ -312,8 +312,16 @@ impl Vec2 {
         self.norm().dot(&rhs.norm())
     }
 
-    pub fn cross(&self) -> Self {
+    pub fn rot(&self, a: f32) -> Self {
+        *self * a.cos() + self.rot90() * a.sin()
+    }
+
+    pub fn rot90(&self) -> Self {
         Self::new(-self.y, self.x)
+    }
+
+    pub fn cross(&self, rhs: &Self) -> f32 {
+        self.x * rhs.y - self.y * rhs.x
     }
 
     pub fn max(&self, rhs: &Self) -> Self {

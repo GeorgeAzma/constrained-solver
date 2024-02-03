@@ -1,3 +1,5 @@
+- Move selection
+- Make copied nodes merge with world nodes
 - Make link placing/removing faster (avoid iterating over all nodes)
-- Add ghost placement
-- Material selection GUI
+- Grid Lock and Grid Rendering
+- Swapping nodes might be invalidating stuff

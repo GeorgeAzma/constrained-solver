@@ -13,7 +13,7 @@ struct VertexOutput {
 @vertex
 fn vs_main(
     @builtin(vertex_index) vert_id: u32,
-    @location(0) position: vec3f,
+    @location(0) position: vec2f,
     @location(1) scale: vec2f,
     @location(2) color: u32,
     @location(3) stroke_color: u32,
@@ -30,7 +30,7 @@ fn vs_main(
     if sides != 4u {
         out.uv /= cos(out.side_ang);
     }
-    out.clip_position = vec4f(pos, position.z, 1.0);
+    out.clip_position = vec4f(pos, 0.0, 1.0);
     out.color = unpack4x8unorm(color);
     out.stroke_color = unpack4x8unorm(stroke_color);
     out.stroke_width = stroke_width;
@@ -71,7 +71,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
         let w = elongate(in.uv, vec2f(0.0, 1.0 - scl.x));
         d = w.z + sdf_ngon(w.xy * vec2f(1.0, scl.y), in.side_ang, in.roundness);
     }
-    let dd = length(vec2f(dpdx(d), dpdy(d))) * 1.5;
+    let dd = length(vec2f(dpdx(d), dpdy(d)));
     var color = mix(in.color, in.stroke_color, clamp((d + in.stroke_width) / dd, 0.0, 1.0));
     color.a *= clamp(-d / dd, 0.0, 1.0);
     var tex_uv = in.uv * vec2f(0.5, -0.5) + 0.5;
