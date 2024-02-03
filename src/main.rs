@@ -5,6 +5,8 @@ pub mod cooldown;
 pub use cooldown::*;
 pub mod vec2;
 pub use vec2::*;
+pub mod node;
+pub use node::*;
 pub mod world;
 pub use world::*;
 pub mod integrator;
