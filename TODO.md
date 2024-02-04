@@ -1,5 +1,4 @@
 - Move selection
+- Fix Removal Error
 - Make copied nodes merge with world nodes
-- Make link placing/removing faster (avoid iterating over all nodes)
 - Grid Lock and Grid Rendering
-- Swapping nodes might be invalidating stuff

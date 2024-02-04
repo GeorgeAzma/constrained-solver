@@ -1,7 +1,7 @@
 use super::renderer;
 use super::App;
 use crate::Node;
-use crate::{integrator::*, Axes, Constraint, Cooldown, Vec2, World};
+use crate::{integrator::*, Axes, Cooldown, Link, Vec2, World};
 use owned_ttf_parser::name::Name;
 use rand::Rng;
 use std::fs::File;
@@ -10,40 +10,8 @@ use winit::event::{MouseButton, WindowEvent};
 use winit::keyboard::KeyCode;
 use winit::window::Window;
 
-const CONSTRAINTS: [Constraint; 7] = [
-    Constraint::Link {
-        node: 0,
-        distance: 0.0,
-    },
-    Constraint::Freeze {
-        axes: Axes::ALL,
-        x: 0.0,
-        y: 0.0,
-    },
-    Constraint::Rotor { speed: 0.0 },
-    Constraint::Hydraulic {
-        node: 0,
-        distance: 0.0,
-        speed: 0.0,
-    },
-    Constraint::Spring {
-        node: 0,
-        distance: 0.0,
-        stiffness: 1.0,
-    },
-    Constraint::Freeze {
-        axes: Axes::Y,
-        x: 0.0,
-        y: 0.0,
-    },
-    Constraint::Rope {
-        node: 0,
-        distance: 0.0,
-    },
-];
-
 #[repr(u32)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Material {
     Node,
     Fixed,
@@ -52,6 +20,21 @@ enum Material {
     Spring,
     Roller,
     Rope,
+}
+const MATERIAL_LEN: u32 = Material::Rope as u32 + 1;
+
+impl From<u32> for Material {
+    fn from(value: u32) -> Self {
+        match value {
+            1 => Material::Fixed,
+            2 => Material::Rotor,
+            3 => Material::Hydraulic,
+            4 => Material::Spring,
+            5 => Material::Roller,
+            6 => Material::Rope,
+            _ => Material::Node,
+        }
+    }
 }
 
 pub struct SimpleApp {
@@ -93,55 +76,81 @@ impl SimpleApp {
         }
     }
 
-    fn add_node(&mut self, x: f32, y: f32) -> u32 {
-        match self.selected_material {
+    fn material_node(material: Material, x: f32, y: f32) -> Node {
+        match material {
             Material::Node | Material::Hydraulic | Material::Spring | Material::Rope => {
-                self.world.add_node(x, y)
+                Node::new(x, y)
             }
-            Material::Fixed => {
-                let n = self.world.add_node(x, y);
-                self.world.nodes[n as usize].add_constraint(Constraint::Freeze {
-                    axes: Axes::ALL,
-                    x,
-                    y,
-                });
-                n
-            }
-            Material::Rotor => {
-                let n = self.world.add_node(x, y);
-                self.world.nodes[n as usize].add_constraint(Constraint::Rotor { speed: 1.0 });
-                self.world.nodes[n as usize].add_constraint(Constraint::Freeze {
-                    axes: Axes::ALL,
-                    x,
-                    y,
-                });
-                n
-            }
-            Material::Roller => {
-                let n = self.world.add_node(x, y);
-                self.world.nodes[n as usize].add_constraint(Constraint::Freeze {
-                    axes: Axes::Y,
-                    x,
-                    y,
-                });
-                n
-            }
+            Material::Fixed => Node::new_fixed(x, y),
+            Material::Rotor => Node::new_rotor(x, y, 1.0),
+            Material::Roller => Node::new_fixed_y(x, y),
         }
+    }
+
+    fn material_link(material: Material, dist: f32) -> Link {
+        match material {
+            Material::Rope { .. } => Link::Rope { n1: 0, n2: 1, dist },
+            Material::Hydraulic { .. } => Link::Hydraulic {
+                n1: 0,
+                n2: 1,
+                dist,
+                speed: 1.0,
+            },
+            Material::Spring { .. } => Link::Spring {
+                n1: 0,
+                n2: 1,
+                dist,
+                stiffness: 1.0,
+            },
+            _ => Link::Link { n1: 0, n2: 1, dist },
+        }
+    }
+
+    const fn material_color(material: Material) -> [u8; 3] {
+        match material {
+            Material::Rope { .. } => [160, 130, 100],
+            Material::Hydraulic { .. } => [32, 72, 180],
+            Material::Spring { .. } => [255, 255, 128],
+            _ => World::NODE_COLOR,
+        }
+    }
+
+    fn add_node(&mut self, x: f32, y: f32) -> u32 {
+        self.world
+            .add(Self::material_node(self.selected_material, x, y))
     }
 
     fn link_nodes(&mut self, node1: u32, node2: u32) {
         match self.selected_material {
             Material::Node | Material::Fixed | Material::Rotor | Material::Roller => {
-                self.world.link_node(node1, node2);
+                self.world.link_node(Link::Link {
+                    n1: node1,
+                    n2: node2,
+                    dist: 0.0,
+                });
             }
             Material::Hydraulic => {
-                self.world.hydraulic_node(node1, node2, 1.0);
+                self.world.link_node(Link::Hydraulic {
+                    n1: node1,
+                    n2: node2,
+                    dist: 0.0,
+                    speed: 1.0,
+                });
             }
             Material::Spring => {
-                self.world.spring_node(node1, node2, 1.0);
+                self.world.link_node(Link::Spring {
+                    n1: node1,
+                    n2: node2,
+                    dist: 0.0,
+                    stiffness: 1.0,
+                });
             }
             Material::Rope => {
-                self.world.rope_node(node1, node2);
+                self.world.link_node(Link::Rope {
+                    n1: node1,
+                    n2: node2,
+                    dist: 0.0,
+                });
             }
         }
     }
@@ -197,7 +206,6 @@ impl SimpleApp {
                     self.link_nodes(selected_node, self.world.nodes.len() as u32 - 1);
                 }
                 self.selected_node = None;
-            } else {
             }
         } else if app.mouse_pressed(MouseButton::Right)
             && intersecting_node.is_none()
@@ -220,8 +228,8 @@ impl SimpleApp {
                 self.selection_start = None;
             } else if let Some(intersecting_node) = intersecting_node {
                 self.world.remove_node(intersecting_node);
-            } else if let Some((node_idx, link_idx)) = intersecting_link {
-                self.world.remove_link(node_idx, link_idx);
+            } else if let Some(link_idx) = intersecting_link {
+                self.world.remove_link(link_idx);
             }
         }
         if app.mouse_down(MouseButton::Left) && app.key_down(KeyCode::ShiftLeft) {
@@ -260,54 +268,36 @@ impl SimpleApp {
             }
         }
 
-        if let Some(selected_node) = self.selected_node {
-            for &idx in self.world.remove_queue.iter() {
-                self.selected_nodes.retain(|n| *n != idx);
+        for &idx in self.world.node_remove_queue.iter() {
+            self.selected_nodes.retain(|n| *n != idx);
+            if let Some(selected_node) = self.selected_node {
                 if idx == selected_node {
                     self.selected_node = None;
                 }
             }
         }
-        self.world.flush();
+
+        let node_swaps = self.world.flush();
+
+        for (idx, swap_idx) in node_swaps {
+            for selected_node in self.selected_nodes.iter_mut() {
+                if *selected_node == idx {
+                    *selected_node = swap_idx;
+                } else if *selected_node == swap_idx {
+                    *selected_node = idx;
+                }
+            }
+            if let Some(selected_node) = self.selected_node {
+                if selected_node == idx {
+                    self.selected_node = Some(swap_idx);
+                } else if selected_node == swap_idx {
+                    self.selected_node = Some(idx);
+                }
+            }
+        }
     }
 
     pub fn event(&mut self, _event: &WindowEvent) {}
-
-    fn render_ghost_link(
-        &self,
-        x: f32,
-        y: f32,
-        link: Constraint,
-        connected_node: u32,
-        gfx: &mut renderer::Renderer,
-    ) {
-        let mut link2 = link.clone();
-        match &mut link2 {
-            Constraint::Link { node, distance, .. }
-            | Constraint::Rope { node, distance, .. }
-            | Constraint::Spring { node, distance, .. }
-            | Constraint::Hydraulic { node, distance, .. } => {
-                *node = connected_node;
-                *distance = Vec2::new(x, y).dist(&self.world.nodes[connected_node as usize].p);
-            }
-            _ => {
-                link2 = Constraint::Link {
-                    node: connected_node,
-                    distance: Vec2::new(x, y).dist(&self.world.nodes[connected_node as usize].p),
-                };
-            }
-        }
-        gfx.color[3] = 64;
-        self.world.render_link(
-            &Node::new_ghost(Vec2::new(x, y), link2.clone()),
-            &link2,
-            &self.world.nodes,
-            gfx,
-        );
-        self.world
-            .render_node(&Node::new_ghost(Vec2::new(x, y), link.clone()), gfx);
-        gfx.color[3] = 255;
-    }
 
     pub fn render(&mut self, gfx: &mut renderer::Renderer) {
         let app = unsafe { self.app.as_ref().unwrap() };
@@ -335,16 +325,19 @@ impl SimpleApp {
         gfx.color = [255, 255, 255, 255];
         self.world.render(gfx);
 
-        let selected_nodes = self.world.select_nodes(&self.selected_nodes);
-        gfx.color = [128, 135, 150, 255];
-        self.world.render_nodes(&selected_nodes, gfx);
+        let (selected_nodes, selected_links) = self.world.select(&self.selected_nodes);
+        gfx.color = [160, 190, 255, 255];
+        self.world
+            .render_structure(&selected_links, &selected_nodes, gfx);
         gfx.color = [255, 255, 255, 255];
 
         // Copying Structure Ghost
         if app.key_down(KeyCode::KeyC) {
-            let selected_node_ghosts = self.world.copy_nodes_as_vec(&self.selected_nodes, mx, my);
+            let (selected_ghost_nodes, selected_ghost_links) =
+                self.world.select_moved(&self.selected_nodes, mx, my);
             gfx.color[3] = 64;
-            self.world.render_nodes(&selected_node_ghosts, gfx);
+            self.world
+                .render_structure(&selected_ghost_links, &selected_ghost_nodes, gfx);
             gfx.color[3] = 255;
         }
 
@@ -352,13 +345,17 @@ impl SimpleApp {
         gfx.reset();
         if let Some(selected_node) = self.selected_node {
             if app.mouse_down(MouseButton::Left) {
-                for i in 0..CONSTRAINTS.len() {
-                    if i as u32 == self.selected_material as u32 {
-                        let mx = app.mouse_x / self.world.scale();
-                        let my = app.mouse_y / self.world.scale();
-                        self.render_ghost_link(mx, my, CONSTRAINTS[i].clone(), selected_node, gfx);
-                    }
-                }
+                gfx.color[3] = 64;
+                let node = Self::material_node(self.selected_material, mx, my);
+                let color = Self::material_color(self.selected_material);
+                self.world.render_node(&node, color, gfx);
+                let selected_node = self.world.nodes[selected_node as usize].clone();
+                self.world.render_link(
+                    &Self::material_link(self.selected_material, selected_node.p.dist(&node.p)),
+                    &vec![selected_node, node],
+                    gfx,
+                );
+                gfx.color[3] = 255;
             }
         }
 
@@ -369,8 +366,9 @@ impl SimpleApp {
         const OFF: Vec2 = Vec2::splat(-0.9);
         let gap = self.world.radius * 2.5;
 
-        for i in 0..CONSTRAINTS.len() {
-            if i as u32 == self.selected_material as u32 {
+        for i in 0..MATERIAL_LEN {
+            let mat = Material::from(i);
+            if mat == self.selected_material {
                 gfx.scale[0] = 1.2;
                 gfx.scale[1] = 1.2;
                 gfx.color = [255, 255, 255, 255];
@@ -380,8 +378,10 @@ impl SimpleApp {
                 gfx.color = [200, 200, 200, 128];
             }
 
+            let p = OFF + Vec2::new(gap * i as f32, 0.0);
             self.world.render_node(
-                &Node::new_ghost(OFF + Vec2::new(gap * i as f32, 0.0), CONSTRAINTS[i].clone()),
+                &Self::material_node(mat, p.x, p.y),
+                Self::material_color(mat),
                 gfx,
             );
         }
